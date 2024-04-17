@@ -9,7 +9,7 @@ use async_trait::async_trait;
 
 use crate::inner::PoolInner;
 use crate::internals::Conn;
-pub use crate::internals::State;
+pub use crate::inner::State;
 
 /// A generic connection pool.
 pub struct Pool<M>

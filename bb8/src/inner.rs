@@ -2,6 +2,7 @@ use std::cmp::{max, min};
 use std::fmt;
 use std::future::Future;
 use std::sync::{Arc, Weak};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -10,13 +11,36 @@ use tokio::spawn;
 use tokio::time::{interval_at, sleep, timeout, Interval};
 
 use crate::api::{Builder, ConnectionState, ManageConnection, PooledConnection, RunError};
-use crate::internals::{Approval, ApprovalIter, Conn, SharedPool, State};
+use crate::internals::{Approval, ApprovalIter, Conn, SharedPool};
+
+struct SharedPoolInnerStats {
+    gets: AtomicU32,
+    gets_waited: AtomicU32,
+}
+
+impl SharedPoolInnerStats {
+    fn new() -> Self {
+        Self {
+            gets: AtomicU32::new(0),
+            gets_waited: AtomicU32::new(0),
+        }
+    }
+
+    fn record_get(&self, with_contention: bool) {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+
+        if with_contention {
+          self.gets_waited.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
 
 pub(crate) struct PoolInner<M>
 where
     M: ManageConnection + Send,
 {
     inner: Arc<SharedPool<M>>,
+    pool_inner_stats : Arc<SharedPoolInnerStats>,
 }
 
 impl<M> PoolInner<M>
@@ -25,6 +49,7 @@ where
 {
     pub(crate) fn new(builder: Builder<M>, manager: M) -> Self {
         let inner = Arc::new(SharedPool::new(builder, manager));
+        let pool_inner_stats = Arc::new(SharedPoolInnerStats::new());
 
         if inner.statics.max_lifetime.is_some() || inner.statics.idle_timeout.is_some() {
             let start = Instant::now() + inner.statics.reaper_rate;
@@ -33,12 +58,16 @@ where
                 Reaper {
                     interval,
                     pool: Arc::downgrade(&inner),
+                    pool_inner_stats: Arc::downgrade(&pool_inner_stats),
                 }
                 .run(),
             );
         }
 
-        Self { inner }
+        Self {
+            inner,
+            pool_inner_stats,
+        }
     }
 
     pub(crate) async fn start_connections(&self) -> Result<(), M::Error> {
@@ -85,6 +114,8 @@ where
     }
 
     pub(crate) async fn get(&self) -> Result<PooledConnection<'_, M>, RunError<M::Error>> {
+        let mut with_contention = false;
+
         let future = async {
             loop {
                 let (conn, approvals) = self.inner.pop();
@@ -96,6 +127,7 @@ where
                 let mut conn = match conn {
                     Some(conn) => PooledConnection::new(self, conn),
                     None => {
+                        with_contention = true;
                         self.inner.notify.notified().await;
                         continue;
                     }
@@ -116,10 +148,14 @@ where
             }
         };
 
-        match timeout(self.inner.statics.connection_timeout, future).await {
+        let result = match timeout(self.inner.statics.connection_timeout, future).await {
             Ok(result) => result,
             _ => Err(RunError::TimedOut),
-        }
+        };
+
+        self.pool_inner_stats.record_get(with_contention);
+
+        result
     }
 
     pub(crate) async fn connect(&self) -> Result<M::Connection, M::Error> {
@@ -148,7 +184,16 @@ where
 
     /// Returns information about the current state of the pool.
     pub(crate) fn state(&self) -> State {
-        self.inner.internals.lock().state()
+        let gets: u32 = self.pool_inner_stats.gets.load(Ordering::SeqCst);
+        let gets_waited: u32 = self.pool_inner_stats.gets_waited.load(Ordering::SeqCst);
+        let pool_internal_state = self.inner.internals.lock().state();
+
+        State {
+            gets: gets,
+            gets_waited: gets_waited,
+            connections: pool_internal_state.connections,
+            idle_connections: pool_internal_state.idle_connections,
+        }
     }
 
     // Outside of Pool to avoid borrow splitting issues on self
@@ -212,6 +257,7 @@ where
     fn clone(&self) -> Self {
         PoolInner {
             inner: self.inner.clone(),
+            pool_inner_stats: self.pool_inner_stats.clone(),
         }
     }
 }
@@ -228,6 +274,7 @@ where
 struct Reaper<M: ManageConnection> {
     interval: Interval,
     pool: Weak<SharedPool<M>>,
+    pool_inner_stats: Weak<SharedPoolInnerStats>,
 }
 
 impl<M: ManageConnection> Reaper<M> {
@@ -235,7 +282,7 @@ impl<M: ManageConnection> Reaper<M> {
         loop {
             let _ = self.interval.tick().await;
             let pool = match self.pool.upgrade() {
-                Some(inner) => PoolInner { inner },
+                Some(inner) => PoolInner { inner, pool_inner_stats: self.pool_inner_stats.upgrade().unwrap()},
                 None => break,
             };
 
@@ -243,4 +290,23 @@ impl<M: ManageConnection> Reaper<M> {
             pool.spawn_replenishing_approvals(approvals);
         }
     }
+}
+
+/// Information about the state of a `Pool`.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct State {
+    /// Information about gets
+    /// Total gets performed, you should consider that the
+    /// value can overflow and start from 0 eventually.
+    pub gets: u32,
+    /// Total gets performed that had to wait for having a
+    /// connection available. The value can overflow and
+    /// start from 0 eventually.
+    pub gets_waited: u32,
+    /// Information about the connections
+    /// The number of connections currently being managed by the pool.
+    pub connections: u32,
+    /// The number of idle connections.
+    pub idle_connections: u32,
 }

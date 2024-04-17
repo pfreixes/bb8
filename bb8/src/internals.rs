@@ -154,8 +154,8 @@ where
         self.dropped((before - self.conns.len()) as u32, config)
     }
 
-    pub(crate) fn state(&self) -> State {
-        State {
+    pub(crate) fn state(&self) -> PoolInternalState {
+        PoolInternalState {
             connections: self.num_conns,
             idle_connections: self.conns.len() as u32,
         }
@@ -249,7 +249,7 @@ impl<C: Send> From<Conn<C>> for IdleConn<C> {
 /// Information about the state of a `Pool`.
 #[derive(Debug)]
 #[non_exhaustive]
-pub struct State {
+pub struct PoolInternalState {
     /// The number of connections currently being managed by the pool.
     pub connections: u32,
     /// The number of idle connections.
