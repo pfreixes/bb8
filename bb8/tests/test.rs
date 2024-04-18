@@ -925,4 +925,3 @@ async fn test_state_get_contention() {
     assert_eq!(state.gets, 2);
     assert_eq!(state.gets_waited, 1);
 }
-

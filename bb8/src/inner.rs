@@ -282,7 +282,10 @@ impl<M: ManageConnection> Reaper<M> {
         loop {
             let _ = self.interval.tick().await;
             let pool = match self.pool.upgrade() {
-                Some(inner) => PoolInner { inner, pool_inner_stats: self.pool_inner_stats.upgrade().unwrap()},
+                Some(inner) => PoolInner {
+                    inner,
+                    pool_inner_stats: self.pool_inner_stats.upgrade().unwrap()
+                },
                 None => break,
             };
 
