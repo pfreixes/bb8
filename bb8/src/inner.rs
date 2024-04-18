@@ -189,8 +189,8 @@ where
         let pool_internal_state = self.inner.internals.lock().state();
 
         State {
-            gets: gets,
-            gets_waited: gets_waited,
+            gets,
+            gets_waited,
             connections: pool_internal_state.connections,
             idle_connections: pool_internal_state.idle_connections,
         }
