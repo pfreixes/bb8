@@ -153,6 +153,9 @@ where
         match (state, self.inner.manager.has_broken(&mut conn.conn)) {
             (ConnectionState::Present, false) => locked.put(conn, None, self.inner.clone()),
             (_, _) => {
+                self.pool_inner_stats
+                    .broken_closed_connections
+                    .fetch_add(1, Ordering::SeqCst);
                 let approvals = locked.dropped(1, &self.inner.statics);
                 self.spawn_replenishing_approvals(approvals);
                 self.inner.notify.notify_waiters();
@@ -168,11 +171,16 @@ where
             .pool_inner_stats
             .openned_connections
             .load(Ordering::SeqCst);
+        let broken_closed_connections = self
+            .pool_inner_stats
+            .broken_closed_connections
+            .load(Ordering::SeqCst);
 
         Statistics {
             gets,
             gets_waited,
             openned_connections,
+            broken_closed_connections,
         }
     }
 
@@ -287,6 +295,7 @@ struct SharedPoolInnerStatistics {
     gets: AtomicU64,
     gets_waited: AtomicU64,
     openned_connections: AtomicU64,
+    broken_closed_connections: AtomicU64,
 }
 
 impl SharedPoolInnerStatistics {
@@ -295,6 +304,7 @@ impl SharedPoolInnerStatistics {
             gets: AtomicU64::new(0),
             gets_waited: AtomicU64::new(0),
             openned_connections: AtomicU64::new(0),
+            broken_closed_connections: AtomicU64::new(0),
         }
     }
 
@@ -322,4 +332,8 @@ pub struct Statistics {
     /// Total connections openned. The value can overflow and
     /// start from 0 eventually.
     pub openned_connections: u64,
+    /// Total connections not returned to the pool because they
+    /// were considered broken by the manager. The value can
+    /// overflow and start from 0 eventually.
+    pub broken_closed_connections: u64,
 }

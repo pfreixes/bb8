@@ -246,6 +246,9 @@ async fn test_drop_on_broken() {
     }
 
     assert!(DROPPED.load(Ordering::SeqCst));
+
+    let statistics = pool.statistics();
+    assert_eq!(statistics.broken_closed_connections, 1);
 }
 
 #[tokio::test]
