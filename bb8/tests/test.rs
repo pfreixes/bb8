@@ -247,8 +247,7 @@ async fn test_drop_on_broken() {
 
     assert!(DROPPED.load(Ordering::SeqCst));
 
-    let statistics = pool.statistics();
-    assert_eq!(statistics.broken_closed_connections, 1);
+    assert_eq!(pool.statistics().broken_closed_connections, 1);
 }
 
 #[tokio::test]
@@ -456,6 +455,9 @@ async fn test_now_invalid() {
     // Now try to get a new connection.
     let r = pool.get().await;
     assert!(r.is_err());
+
+    // both connections in the pool were considered invalid
+    assert_eq!(pool.statistics().invalid_closed_connections, 2);
 }
 
 #[tokio::test]

@@ -118,6 +118,9 @@ where
                 match self.inner.manager.is_valid(&mut conn).await {
                     Ok(()) => return Ok(conn),
                     Err(e) => {
+                        self.pool_inner_stats
+                            .invalid_closed_connections
+                            .fetch_add(1, Ordering::SeqCst);
                         self.inner.forward_error(e);
                         conn.state = ConnectionState::Invalid;
                         continue;
@@ -175,12 +178,17 @@ where
             .pool_inner_stats
             .broken_closed_connections
             .load(Ordering::SeqCst);
+        let invalid_closed_connections = self
+            .pool_inner_stats
+            .invalid_closed_connections
+            .load(Ordering::SeqCst);
 
         Statistics {
             gets,
             gets_waited,
-            openned_connections,
+            invalid_closed_connections,
             broken_closed_connections,
+            openned_connections,
         }
     }
 
@@ -294,8 +302,9 @@ impl<M: ManageConnection> Reaper<M> {
 struct SharedPoolInnerStatistics {
     gets: AtomicU64,
     gets_waited: AtomicU64,
-    openned_connections: AtomicU64,
+    invalid_closed_connections: AtomicU64,
     broken_closed_connections: AtomicU64,
+    openned_connections: AtomicU64,
 }
 
 impl SharedPoolInnerStatistics {
@@ -303,8 +312,9 @@ impl SharedPoolInnerStatistics {
         Self {
             gets: AtomicU64::new(0),
             gets_waited: AtomicU64::new(0),
-            openned_connections: AtomicU64::new(0),
+            invalid_closed_connections: AtomicU64::new(0),
             broken_closed_connections: AtomicU64::new(0),
+            openned_connections: AtomicU64::new(0),
         }
     }
 
@@ -329,11 +339,15 @@ pub struct Statistics {
     /// connection available. The value can overflow and
     /// start from 0 eventually.
     pub gets_waited: u64,
-    /// Total connections openned. The value can overflow and
-    /// start from 0 eventually.
-    pub openned_connections: u64,
+    /// Total connections not used from the pool because they
+    /// were considered invalid by the manager. The value can
+    /// overflow and start from 0 eventually.
+    pub invalid_closed_connections: u64,
     /// Total connections not returned to the pool because they
     /// were considered broken by the manager. The value can
     /// overflow and start from 0 eventually.
     pub broken_closed_connections: u64,
+    /// Total connections openned. The value can overflow and
+    /// start from 0 eventually.
+    pub openned_connections: u64,
 }
