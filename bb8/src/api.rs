@@ -8,8 +8,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::inner::PoolInner;
+pub use crate::inner::Statistics;
 use crate::internals::Conn;
-pub use crate::inner::State;
+pub use crate::internals::State;
 
 /// A generic connection pool.
 pub struct Pool<M>
@@ -43,6 +44,11 @@ impl<M: ManageConnection> Pool<M> {
     /// Returns a `Builder` instance to configure a new pool.
     pub fn builder() -> Builder<M> {
         Builder::new()
+    }
+
+    /// Returns statistics about the historical usage of the pool.
+    pub fn statistics(&self) -> Statistics {
+        self.inner.statistics()
     }
 
     /// Returns information about the current state of the pool.

@@ -1,8 +1,8 @@
 use std::cmp::{max, min};
 use std::fmt;
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -10,37 +10,15 @@ use futures_util::TryFutureExt;
 use tokio::spawn;
 use tokio::time::{interval_at, sleep, timeout, Interval};
 
-use crate::api::{Builder, ConnectionState, ManageConnection, PooledConnection, RunError};
+use crate::api::{Builder, ConnectionState, ManageConnection, PooledConnection, RunError, State};
 use crate::internals::{Approval, ApprovalIter, Conn, SharedPool};
-
-struct SharedPoolInnerStats {
-    gets: AtomicU32,
-    gets_waited: AtomicU32,
-}
-
-impl SharedPoolInnerStats {
-    fn new() -> Self {
-        Self {
-            gets: AtomicU32::new(0),
-            gets_waited: AtomicU32::new(0),
-        }
-    }
-
-    fn record_get(&self, with_contention: bool) {
-        self.gets.fetch_add(1, Ordering::SeqCst);
-
-        if with_contention {
-          self.gets_waited.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-}
 
 pub(crate) struct PoolInner<M>
 where
     M: ManageConnection + Send,
 {
     inner: Arc<SharedPool<M>>,
-    pool_inner_stats : Arc<SharedPoolInnerStats>,
+    pool_inner_stats: Arc<SharedPoolInnerStats>,
 }
 
 impl<M> PoolInner<M>
@@ -182,18 +160,17 @@ where
         }
     }
 
+    /// Returns statistics about the historical usage of the pool.
+    pub(crate) fn statistics(&self) -> Statistics {
+        let gets = self.pool_inner_stats.gets.load(Ordering::SeqCst);
+        let gets_waited = self.pool_inner_stats.gets_waited.load(Ordering::SeqCst);
+
+        Statistics { gets, gets_waited }
+    }
+
     /// Returns information about the current state of the pool.
     pub(crate) fn state(&self) -> State {
-        let gets: u32 = self.pool_inner_stats.gets.load(Ordering::SeqCst);
-        let gets_waited: u32 = self.pool_inner_stats.gets_waited.load(Ordering::SeqCst);
-        let pool_internal_state = self.inner.internals.lock().state();
-
-        State {
-            gets,
-            gets_waited,
-            connections: pool_internal_state.connections,
-            idle_connections: pool_internal_state.idle_connections,
-        }
+        self.inner.internals.lock().state()
     }
 
     // Outside of Pool to avoid borrow splitting issues on self
@@ -284,7 +261,7 @@ impl<M: ManageConnection> Reaper<M> {
             let pool = match self.pool.upgrade() {
                 Some(inner) => PoolInner {
                     inner,
-                    pool_inner_stats: self.pool_inner_stats.upgrade().unwrap()
+                    pool_inner_stats: self.pool_inner_stats.upgrade().unwrap(),
                 },
                 None => break,
             };
@@ -295,21 +272,38 @@ impl<M: ManageConnection> Reaper<M> {
     }
 }
 
-/// Information about the state of a `Pool`.
+struct SharedPoolInnerStats {
+    gets: AtomicU64,
+    gets_waited: AtomicU64,
+}
+
+impl SharedPoolInnerStats {
+    fn new() -> Self {
+        Self {
+            gets: AtomicU64::new(0),
+            gets_waited: AtomicU64::new(0),
+        }
+    }
+
+    fn record_get(&self, with_contention: bool) {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+
+        if with_contention {
+            self.gets_waited.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Statistics about the historical usage of the `Pool`.
 #[derive(Debug)]
 #[non_exhaustive]
-pub struct State {
+pub struct Statistics {
     /// Information about gets
     /// Total gets performed, you should consider that the
     /// value can overflow and start from 0 eventually.
-    pub gets: u32,
+    pub gets: u64,
     /// Total gets performed that had to wait for having a
     /// connection available. The value can overflow and
     /// start from 0 eventually.
-    pub gets_waited: u32,
-    /// Information about the connections
-    /// The number of connections currently being managed by the pool.
-    pub connections: u32,
-    /// The number of idle connections.
-    pub idle_connections: u32,
+    pub gets_waited: u64,
 }

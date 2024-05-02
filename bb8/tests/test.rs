@@ -921,7 +921,7 @@ async fn test_state_get_contention() {
     // Wait for the second attempt to get a connection.
     f.await.unwrap();
 
-    let state = pool.state();
-    assert_eq!(state.gets, 2);
-    assert_eq!(state.gets_waited, 1);
+    let statistics = pool.statistics();
+    assert_eq!(statistics.gets, 2);
+    assert_eq!(statistics.gets_waited, 1);
 }
