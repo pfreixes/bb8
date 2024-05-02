@@ -925,3 +925,26 @@ async fn test_statistics_get_contention() {
     assert_eq!(statistics.gets, 2);
     assert_eq!(statistics.gets_waited, 1);
 }
+
+#[tokio::test]
+async fn test_statistics_openned_connections() {
+    let pool = Pool::builder()
+        .max_size(1)
+        .min_idle(1)
+        .build(OkManager::<FakeConnection>::new())
+        .await
+        .unwrap();
+
+    let (tx1, rx1) = oneshot::channel();
+    let clone = pool.clone();
+    tokio::spawn(async move {
+        let _ = clone.get().await.unwrap();
+        tx1.send(()).unwrap();
+    });
+
+    // wait until finished.
+    rx1.await.unwrap();
+
+    let statistics = pool.statistics();
+    assert_eq!(statistics.openned_connections, 1);
+}

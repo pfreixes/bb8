@@ -164,8 +164,16 @@ where
     pub(crate) fn statistics(&self) -> Statistics {
         let gets = self.pool_inner_stats.gets.load(Ordering::SeqCst);
         let gets_waited = self.pool_inner_stats.gets_waited.load(Ordering::SeqCst);
+        let openned_connections = self
+            .pool_inner_stats
+            .openned_connections
+            .load(Ordering::SeqCst);
 
-        Statistics { gets, gets_waited }
+        Statistics {
+            gets,
+            gets_waited,
+            openned_connections,
+        }
     }
 
     /// Returns information about the current state of the pool.
@@ -200,6 +208,9 @@ where
                         .internals
                         .lock()
                         .put(conn, Some(approval), self.inner.clone());
+                    self.pool_inner_stats
+                        .openned_connections
+                        .fetch_add(1, Ordering::SeqCst);
                     return Ok(());
                 }
                 Err(e) => {
@@ -275,6 +286,7 @@ impl<M: ManageConnection> Reaper<M> {
 struct SharedPoolInnerStatistics {
     gets: AtomicU64,
     gets_waited: AtomicU64,
+    openned_connections: AtomicU64,
 }
 
 impl SharedPoolInnerStatistics {
@@ -282,6 +294,7 @@ impl SharedPoolInnerStatistics {
         Self {
             gets: AtomicU64::new(0),
             gets_waited: AtomicU64::new(0),
+            openned_connections: AtomicU64::new(0),
         }
     }
 
@@ -306,4 +319,7 @@ pub struct Statistics {
     /// connection available. The value can overflow and
     /// start from 0 eventually.
     pub gets_waited: u64,
+    /// Total connections openned. The value can overflow and
+    /// start from 0 eventually.
+    pub openned_connections: u64,
 }
