@@ -18,7 +18,7 @@ where
     M: ManageConnection + Send,
 {
     inner: Arc<SharedPool<M>>,
-    pool_inner_stats: Arc<SharedPoolInnerStats>,
+    pool_inner_stats: Arc<SharedPoolInnerStatistics>,
 }
 
 impl<M> PoolInner<M>
@@ -27,7 +27,7 @@ where
 {
     pub(crate) fn new(builder: Builder<M>, manager: M) -> Self {
         let inner = Arc::new(SharedPool::new(builder, manager));
-        let pool_inner_stats = Arc::new(SharedPoolInnerStats::new());
+        let pool_inner_stats = Arc::new(SharedPoolInnerStatistics::new());
 
         if inner.statics.max_lifetime.is_some() || inner.statics.idle_timeout.is_some() {
             let start = Instant::now() + inner.statics.reaper_rate;
@@ -251,7 +251,7 @@ where
 struct Reaper<M: ManageConnection> {
     interval: Interval,
     pool: Weak<SharedPool<M>>,
-    pool_inner_stats: Weak<SharedPoolInnerStats>,
+    pool_inner_stats: Weak<SharedPoolInnerStatistics>,
 }
 
 impl<M: ManageConnection> Reaper<M> {
@@ -272,12 +272,12 @@ impl<M: ManageConnection> Reaper<M> {
     }
 }
 
-struct SharedPoolInnerStats {
+struct SharedPoolInnerStatistics {
     gets: AtomicU64,
     gets_waited: AtomicU64,
 }
 
-impl SharedPoolInnerStats {
+impl SharedPoolInnerStatistics {
     fn new() -> Self {
         Self {
             gets: AtomicU64::new(0),
