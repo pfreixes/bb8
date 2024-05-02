@@ -183,9 +183,15 @@ where
             .invalid_closed_connections
             .load(Ordering::SeqCst);
 
+        let locked = self.inner.internals.lock();
+        let max_idle_time_closed_connections = locked.max_idle_time_closed_connections;
+        let max_life_time_closed_connections = locked.max_life_time_closed_connections;
+
         Statistics {
             gets,
             gets_waited,
+            max_idle_time_closed_connections,
+            max_life_time_closed_connections,
             invalid_closed_connections,
             broken_closed_connections,
             openned_connections,
@@ -339,6 +345,14 @@ pub struct Statistics {
     /// connection available. The value can overflow and
     /// start from 0 eventually.
     pub gets_waited: u64,
+    /// Total connections closed because they reached the
+    /// max idle time configured. The value can
+    /// overflow and start from 0 eventually.
+    pub max_idle_time_closed_connections: u64,
+    /// Total connections closed because they reached the
+    /// max life time configured. The value can
+    /// overflow and start from 0 eventually.
+    pub max_life_time_closed_connections: u64,
     /// Total connections not used from the pool because they
     /// were considered invalid by the manager. The value can
     /// overflow and start from 0 eventually.

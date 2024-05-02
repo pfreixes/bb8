@@ -63,6 +63,8 @@ where
     conns: VecDeque<IdleConn<M::Connection>>,
     num_conns: u32,
     pending_conns: u32,
+    pub max_idle_time_closed_connections: u64,
+    pub max_life_time_closed_connections: u64,
 }
 
 impl<M> PoolInternals<M>
@@ -137,19 +139,30 @@ where
     }
 
     pub(crate) fn reap(&mut self, config: &Builder<M>) -> ApprovalIter {
+        let mut max_life_time_closed = 0;
+        let mut max_idle_time_closed = 0;
         let now = Instant::now();
         let before = self.conns.len();
 
         self.conns.retain(|conn| {
             let mut keep = true;
             if let Some(timeout) = config.idle_timeout {
-                keep &= now - conn.idle_start < timeout;
+                if now - conn.idle_start >= timeout {
+                    max_idle_time_closed += 1;
+                    keep &= false;
+                }
             }
             if let Some(lifetime) = config.max_lifetime {
-                keep &= now - conn.conn.birth < lifetime;
+                if now - conn.conn.birth >= lifetime {
+                    max_life_time_closed += 1;
+                    keep &= false;
+                }
             }
             keep
         });
+
+        self.max_idle_time_closed_connections += max_idle_time_closed;
+        self.max_life_time_closed_connections += max_life_time_closed;
 
         self.dropped((before - self.conns.len()) as u32, config)
     }
@@ -171,6 +184,8 @@ where
             conns: VecDeque::new(),
             num_conns: 0,
             pending_conns: 0,
+            max_idle_time_closed_connections: 0,
+            max_life_time_closed_connections: 0,
         }
     }
 }

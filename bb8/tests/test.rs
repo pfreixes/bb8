@@ -461,6 +461,66 @@ async fn test_now_invalid() {
 }
 
 #[tokio::test]
+async fn test_max_idletime() {
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Default)]
+    struct Connection;
+
+    impl Drop for Connection {
+        fn drop(&mut self) {
+            DROPPED.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let manager = NthConnectionFailManager::<Connection>::new(5);
+    let pool = Pool::builder()
+        .idle_timeout(Some(Duration::from_secs(1)))
+        .connection_timeout(Duration::from_secs(1))
+        .reaper_rate(Duration::from_secs(1))
+        .max_size(5)
+        .min_idle(Some(5))
+        .build(manager)
+        .await
+        .unwrap();
+
+    let (tx1, rx1) = oneshot::channel();
+    let (tx2, rx2) = oneshot::channel();
+    let clone = pool.clone();
+    tokio::spawn(async move {
+        let conn = clone.get().await.unwrap();
+        tx1.send(()).unwrap();
+        // NB: If we sleep here we'll block this thread's event loop, and the
+        // reaper can't run.
+        let _ = rx2
+            .map(|r| match r {
+                Ok(v) => Ok((v, conn)),
+                Err(_) => Err((Error, conn)),
+            })
+            .await;
+    });
+
+    rx1.await.unwrap();
+
+    // And wait.
+    assert!(timeout(Duration::from_secs(2), pending::<()>())
+        .await
+        .is_err());
+    assert_eq!(DROPPED.load(Ordering::SeqCst), 4);
+    tx2.send(()).unwrap();
+
+    // And wait some more.
+    assert!(timeout(Duration::from_secs(3), pending::<()>())
+        .await
+        .is_err());
+
+    assert_eq!(DROPPED.load(Ordering::SeqCst), 5);
+
+    // all 5 idle connections were closed due to max idle time
+    assert_eq!(pool.statistics().max_idle_time_closed_connections, 5);
+}
+
+#[tokio::test]
 async fn test_max_lifetime() {
     static DROPPED: AtomicUsize = AtomicUsize::new(0);
 
@@ -514,6 +574,9 @@ async fn test_max_lifetime() {
         .await
         .is_err());
     assert_eq!(DROPPED.load(Ordering::SeqCst), 5);
+
+    // all 5 connections were closed due to max life time
+    assert_eq!(pool.statistics().max_life_time_closed_connections, 5);
 }
 
 #[tokio::test]
