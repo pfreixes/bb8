@@ -27,7 +27,7 @@ where
 {
     pub(crate) fn new(builder: Builder<M>, manager: M) -> Self {
         let inner = Arc::new(SharedPool::new(builder, manager));
-        let pool_inner_stats = Arc::new(SharedPoolInnerStatistics::new());
+        let pool_inner_stats = Arc::new(SharedPoolInnerStatistics::default());
 
         if inner.statics.max_lifetime.is_some() || inner.statics.idle_timeout.is_some() {
             let start = Instant::now() + inner.statics.reaper_rate;
@@ -92,7 +92,7 @@ where
     }
 
     pub(crate) async fn get(&self) -> Result<PooledConnection<'_, M>, RunError<M::Error>> {
-        let mut with_contention = false;
+        let mut wait_time_start = None;
 
         let future = async {
             loop {
@@ -105,7 +105,7 @@ where
                 let mut conn = match conn {
                     Some(conn) => PooledConnection::new(self, conn),
                     None => {
-                        with_contention = true;
+                        wait_time_start = Some(Instant::now());
                         self.inner.notify.notified().await;
                         continue;
                     }
@@ -134,8 +134,16 @@ where
             _ => Err(RunError::TimedOut),
         };
 
-        self.pool_inner_stats.record_get(with_contention);
-
+        if let Some(wait_time_start) = wait_time_start {
+            let wait_time = Instant::now() - wait_time_start;
+            self.pool_inner_stats
+                .gets_waited_wait_time_micro
+                .fetch_add(wait_time.as_micros() as u64, Ordering::SeqCst);
+            self.pool_inner_stats
+                .gets_waited
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        self.pool_inner_stats.gets.fetch_add(1, Ordering::SeqCst);
         result
     }
 
@@ -182,6 +190,10 @@ where
             .pool_inner_stats
             .invalid_closed_connections
             .load(Ordering::SeqCst);
+        let gets_waited_wait_time_micro = self
+            .pool_inner_stats
+            .gets_waited_wait_time_micro
+            .load(Ordering::SeqCst);
 
         let locked = self.inner.internals.lock();
         let max_idle_time_closed_connections = locked.max_idle_time_closed_connections;
@@ -190,6 +202,7 @@ where
         Statistics {
             gets,
             gets_waited,
+            gets_waited_wait_time_micro,
             max_idle_time_closed_connections,
             max_life_time_closed_connections,
             invalid_closed_connections,
@@ -305,32 +318,14 @@ impl<M: ManageConnection> Reaper<M> {
     }
 }
 
+#[derive(Default)]
 struct SharedPoolInnerStatistics {
     gets: AtomicU64,
     gets_waited: AtomicU64,
+    gets_waited_wait_time_micro: AtomicU64,
     invalid_closed_connections: AtomicU64,
     broken_closed_connections: AtomicU64,
     openned_connections: AtomicU64,
-}
-
-impl SharedPoolInnerStatistics {
-    fn new() -> Self {
-        Self {
-            gets: AtomicU64::new(0),
-            gets_waited: AtomicU64::new(0),
-            invalid_closed_connections: AtomicU64::new(0),
-            broken_closed_connections: AtomicU64::new(0),
-            openned_connections: AtomicU64::new(0),
-        }
-    }
-
-    fn record_get(&self, with_contention: bool) {
-        self.gets.fetch_add(1, Ordering::SeqCst);
-
-        if with_contention {
-            self.gets_waited.fetch_add(1, Ordering::SeqCst);
-        }
-    }
 }
 
 /// Statistics about the historical usage of the `Pool`.
@@ -345,6 +340,10 @@ pub struct Statistics {
     /// connection available. The value can overflow and
     /// start from 0 eventually.
     pub gets_waited: u64,
+    /// Total time waited by gets that suffered from contention
+    /// in microseconds. The value can overflow and start
+    /// from 0 eventually.
+    pub gets_waited_wait_time_micro: u64,
     /// Total connections closed because they reached the
     /// max idle time configured. The value can
     /// overflow and start from 0 eventually.

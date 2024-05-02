@@ -992,6 +992,7 @@ async fn test_statistics_get_contention() {
     let statistics = pool.statistics();
     assert_eq!(statistics.gets, 2);
     assert_eq!(statistics.gets_waited, 1);
+    assert!(statistics.gets_waited_wait_time_micro > 0);
 }
 
 #[tokio::test]
