@@ -887,7 +887,7 @@ async fn test_broken_connections_dont_starve_pool() {
 }
 
 #[tokio::test]
-async fn test_state_get_contention() {
+async fn test_statistics_get_contention() {
     let pool = Pool::builder()
         .max_size(1)
         .min_idle(1)
